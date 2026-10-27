@@ -1,0 +1,9 @@
+python-telegram-bot[job-queue,socks]>=22.0,<23
+google-genai>=1.0
+jdatetime>=5.0
+matplotlib>=3.8
+arabic-reshaper>=3.0
+python-bidi>=0.6
+openpyxl>=3.1
+python-dotenv>=1.0
+tzdata
