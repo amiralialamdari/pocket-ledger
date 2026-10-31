@@ -21,7 +21,11 @@ class Config:
     bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     owner_id: int = _int("OWNER_ID", 0)
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+    gemini_fallback_models: tuple[str, ...] = tuple(
+        m.strip() for m in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.5-flash,gemini-3.1-flash-lite,gemini-flash-lite-latest").split(",")
+        if m.strip()
+    )
     telegram_proxy: str = os.getenv("TELEGRAM_PROXY", "")
     db_path: str = os.getenv("DB_PATH", str(BASE_DIR / "data" / "ledger.db"))
     font_path: str = os.getenv("CHART_FONT_PATH", "")

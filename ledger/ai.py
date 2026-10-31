@@ -4,6 +4,7 @@ import logging
 import re
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from .config import EXPENSE_CATEGORIES, INCOME_CATEGORIES
@@ -125,7 +126,7 @@ def fallback_parse(text: str) -> list[dict]:
     if not amount:
         return []
     # Bare small numbers in casual Persian ("85 ناهار") mean thousands of Toman.
-    if amount < 1000 and not re.search(r"تومن|تومان|ریال", text):
+    if amount < 1000 and not re.search(r"ریال|هزار|میلیون", text):
         amount *= 1000
     is_income = any(h in text for h in INCOME_HINTS)
     desc = re.sub(r"[\d۰-۹٠-٩,٬.]+|هزار|میلیون|ملیون|تومان|تومن|ریال", " ", text)
@@ -141,9 +142,12 @@ def fallback_parse(text: str) -> list[dict]:
 
 
 class AI:
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, fallbacks: list[str] | None = None):
         self.model = model
-        self.client = genai.Client(api_key=api_key) if api_key else None
+        self.fallbacks = [m for m in fallbacks or [] if m != model]
+        # Fail fast (one retry, 25s timeout) so an overloaded model hands over to the next fallback quickly.
+        http = types.HttpOptions(timeout=25_000, retry_options=types.HttpRetryOptions(attempts=2))
+        self.client = genai.Client(api_key=api_key, http_options=http) if api_key else None
 
     @property
     def enabled(self) -> bool:
@@ -154,8 +158,18 @@ class AI:
             temperature=0.1 if json_mode else 0.6,
             response_mime_type="application/json" if json_mode else "text/plain",
         )
-        resp = await self.client.aio.models.generate_content(model=self.model, contents=prompt, config=cfg)
-        return resp.text or ""
+        last_error: Exception | None = None
+        # Try the main model, then fallbacks when one is overloaded, rate-limited or retired.
+        for model in [self.model, *self.fallbacks]:
+            try:
+                resp = await self.client.aio.models.generate_content(model=model, contents=prompt, config=cfg)
+                return resp.text or ""
+            except genai_errors.APIError as e:
+                if e.code not in (404, 429, 500, 503, 504):
+                    raise
+                log.warning("Gemini model %s unavailable (%s); trying next", model, e.code)
+                last_error = e
+        raise last_error
 
     async def parse(self, text: str, accounts: list[dict], is_sms: bool = False) -> tuple[list[dict], str | None]:
         """Returns (actions, reply). Falls back to a regex parser if AI is unavailable."""

@@ -2,8 +2,10 @@
 import logging
 import sys
 
+import httpx
 from telegram import BotCommand, Update
 from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+from telegram.request import HTTPXRequest
 
 from ledger import handlers as h
 from ledger.ai import AI
@@ -31,16 +33,24 @@ async def post_init(app: Application) -> None:
              config.gemini_model if config.gemini_api_key else "disabled")
 
 
+def telegram_request(read_timeout: float = 20) -> HTTPXRequest:
+    kwargs = {}
+    if not config.telegram_proxy:
+        # Bind to an IPv4 address: some hosts have IPv6 routes to Telegram that hang during TLS.
+        kwargs["transport"] = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+    return HTTPXRequest(connect_timeout=20, read_timeout=read_timeout, write_timeout=30, pool_timeout=20,
+                        proxy=config.telegram_proxy or None, httpx_kwargs=kwargs)
+
+
 def main() -> None:
     if not config.bot_token:
         sys.exit("TELEGRAM_BOT_TOKEN is missing. Copy .env.example to .env and fill it in.")
 
-    builder = ApplicationBuilder().token(config.bot_token).post_init(post_init)
-    if config.telegram_proxy:
-        builder = builder.proxy(config.telegram_proxy).get_updates_proxy(config.telegram_proxy)
-    app = builder.build()
+    app = (ApplicationBuilder().token(config.bot_token).post_init(post_init)
+           .request(telegram_request()).get_updates_request(telegram_request(read_timeout=40))
+           .build())
     app.bot_data["db"] = DB(config.db_path)
-    app.bot_data["ai"] = AI(config.gemini_api_key, config.gemini_model)
+    app.bot_data["ai"] = AI(config.gemini_api_key, config.gemini_model, list(config.gemini_fallback_models))
 
     commands = {
         "start": h.cmd_start, "help": h.cmd_help, "balance": h.cmd_balance, "today": h.cmd_today,
